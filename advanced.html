@@ -279,7 +279,20 @@
       let allChars=chosen.flatMap(s=>charactersForSetAndFaction(s,faction));
       allChars=uniquePreserve(allChars);
 
-      return {faction,sets:chosen,characters:allChars,debug:`Mode=${mode}\\nOwned=${owned.length}\\nUnowned=${unowned.length}`};
+      // Ensure at least 8 characters
+      let addedExtra=false;
+      let remaining=allSets.filter(s=>!chosen.includes(s));
+      while(allChars.length<8 && remaining.length){
+        addedExtra=true;
+        const next=pickRandom(remaining,1)[0];
+        chosen.push(next);
+        remaining=remaining.filter(x=>x!==next);
+        allChars.push(...charactersForSetAndFaction(next,faction));
+        allChars=uniquePreserve(allChars);
+      }
+
+      return {faction,sets:chosen,characters:allChars,addedExtra,
+              debug:`Mode=${mode}\nOwned=${owned.length}\nUnowned=${unowned.length}`};
     }
 
     /**********************
@@ -313,7 +326,7 @@
         $('characterList').appendChild(li);
       });
       $('charCount').textContent=r.characters.length;
-      $('debug').textContent=r.debug;
+      $('debug').textContent=r.debug + (r.addedExtra ? "\nExtra sets added to reach 8+" : "");
     }
 
     /**********************
@@ -322,7 +335,7 @@
     function copyList(){
       const items=[...document.querySelectorAll('#characterList li')].map(li=>'• '+li.textContent);
       const sets=[...document.querySelectorAll('#chosenSets span')].map(s=>s.textContent);
-      const txt=['Moonstone List Generator (Advanced)','','Sets:',...sets.map(s=>'- '+s),'',`Characters (${items.length}):`,...items].join('\\n');
+      const txt=['Moonstone List Generator (Advanced)','','Sets:',...sets.map(s=>'- '+s),'',`Characters (${items.length}):`,...items].join('\n');
       navigator.clipboard.writeText(txt).then(()=>{ $('copyBtn').textContent='Copied!'; setTimeout(()=>{$('copyBtn').textContent='Copy list';},1200); });
     }
 
