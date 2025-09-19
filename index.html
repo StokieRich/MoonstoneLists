@@ -88,7 +88,6 @@
     const CSV_URL = 'models.csv';
     const FACTION_WHITELIST = ['Commonwealth','Leshavult','Dominion','Shades'];
     const EXCLUDED_KEYWORDS = ['bunny', 'striga', 'strigya', 'urchin', 'sprog', 'pookie', 'jeremy', 'lampy', 'terrible musician', 'teacake', 'pidge', 'flay, bearer' ];
-    const ANYA_ALIASES = ['anya bartol', 'strigya anya', 'anya / strigya anya'];
     const RANDOM_LABEL = 'Random';
 
     const state = { rows: [], bySet: new Map(), discoveredFactions: new Set(), lastResult: null };
@@ -100,7 +99,6 @@
     const norm = (s) => (s||'').trim().toLowerCase();
     function splitTokens(val){ return (val||'').split(/[\\/,;&|]/).map(v=>v.trim()).filter(Boolean); }
     function isExcludedCharacter(name){ return EXCLUDED_KEYWORDS.some(k => norm(name).includes(k)); }
-    function mergeAnyaGlobally(chars){ return chars.some(c=>ANYA_ALIASES.includes(norm(c))) ? [...chars.filter(c=>!ANYA_ALIASES.includes(norm(c))), 'Anya / Striga Anya'] : chars; }
     function uniquePreserve(arr){ const seen=new Set(), out=[]; for(const x of arr){ if(!seen.has(norm(x))){ seen.add(norm(x)); out.push(x); } } return out; }
     function pickRandom(arr,n){ const c=arr.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]];} return c.slice(0,n); }
     function chooseFaction(req){ if(req===RANDOM_LABEL){ const pool=[...state.discoveredFactions].filter(f=>FACTION_WHITELIST.includes(f)); return pool[Math.floor(Math.random()*pool.length)]||FACTION_WHITELIST[0]; } return req; }
@@ -212,6 +210,7 @@
   </script>
 </body>
 </html>
+
 
 
 
