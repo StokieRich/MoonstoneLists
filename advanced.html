@@ -33,7 +33,8 @@
       <h1 class="text-3xl font-bold">Moonstone List Generator — Advanced</h1>
       <p class="text-slate-600">
         Select the sets you own for a faction, then generate lists using only those. 
-        Optionally allow 1 or 2 extra “Purchase suggestion” boxes to be added.
+        Optionally allow up to 1 or 2 extra “Purchase suggestion” boxes to be added. 
+        You can also require that at least one healer is included.
       </p>
     </header>
 
@@ -55,6 +56,12 @@
           <button id="clearAllBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Clear All</button>
         </div>
       </div>
+
+      <!-- Options -->
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" id="healerMandatory" />
+        Healer mandatory
+      </label>
 
       <!-- Generation buttons -->
       <div class="flex flex-wrap gap-2">
@@ -171,25 +178,51 @@
                  .map(r=>r.Character)
                  .filter(c=>c&&!isExcludedCharacter(c));
     }
+    function healerInSetForFaction(set,faction){
+      const rows=state.bySet.get(set)||[];
+      return rows.some(r=>r.factions.map(norm).includes(norm(faction)) && r.Healer);
+    }
+
     function generateAdvanced(mode){
       const faction=state.lastFaction;
       if(!faction) return {sets:[],characters:[],debug:'No faction selected'};
       const owned=getOwnedSets();
       const allSets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
       const unowned=allSets.filter(s=>!owned.includes(s));
-
       let chosen=[];
+
       if(mode==='owned'){
-        chosen = pickRandom(owned.length?owned:allSets, Math.min(3,owned.length?owned.length:allSets.length));
-      } else if(mode==='add1'){
-        chosen = pickRandom(owned, Math.min(2,owned.length));
-        if(chosen.length<3 && unowned.length>0){
-          chosen.push(pickRandom(unowned,1)[0]);
+        chosen = pickRandom(owned, Math.min(3,owned.length));
+      } 
+      else if(mode==='add1' || mode==='add2'){
+        const extraSlots = (mode==='add1') ? 1 : 2;
+        const poolSize = owned.length + extraSlots;
+        const picks=[];
+        while(picks.length<3){
+          const roll=Math.floor(Math.random()*poolSize);
+          if(roll<owned.length){
+            const set=owned[roll];
+            if(!picks.includes(set)) picks.push(set);
+          } else {
+            if(unowned.length){
+              const set=pickRandom(unowned,1)[0];
+              if(!picks.includes(set)) picks.push(set);
+            }
+          }
         }
-      } else if(mode==='add2'){
-        chosen = pickRandom(owned, Math.min(1,owned.length));
-        const needed=3-chosen.length;
-        chosen=chosen.concat(pickRandom(unowned, Math.min(needed,2)));
+        chosen=picks;
+      }
+
+      // If healer mandatory: bias last pick towards healer set if needed
+      const healerMandatory=$('healerMandatory').checked;
+      if(healerMandatory){
+        const hasHealer=chosen.some(s=>healerInSetForFaction(s,faction));
+        if(!hasHealer){
+          const healerOptions=allSets.filter(s=>healerInSetForFaction(s,faction));
+          if(healerOptions.length){
+            chosen[chosen.length-1]=pickRandom(healerOptions,1)[0];
+          }
+        }
       }
 
       // Characters
@@ -205,10 +238,10 @@
     function renderResult(r){
       $('results').classList.remove('hidden');
       $('chosenSets').innerHTML='';
+      const owned=getOwnedSets();
       r.sets.forEach(s=>{
         const span=document.createElement('span');
         span.className='pill';
-        const owned=getOwnedSets();
         if(!owned.includes(s)){
           span.textContent='✨ '+s+' (Purchase suggestion)';
           span.classList.add('bg-yellow-100','text-yellow-800');
@@ -221,7 +254,12 @@
       $('characterList').innerHTML='';
       r.characters.forEach(c=>{
         const li=document.createElement('li');
-        li.textContent=c;
+        const healerRow=state.rows.find(row=>row.Character===c && row.Healer && row.factions.map(norm).includes(norm(r.faction)));
+        if(healerRow){
+          li.innerHTML=`<span class="text-green-700 font-semibold">✚ ${c}</span>`;
+        } else {
+          li.textContent=c;
+        }
         $('characterList').appendChild(li);
       });
       $('charCount').textContent=r.characters.length;
