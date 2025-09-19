@@ -55,6 +55,19 @@
           <button id="selectAllBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Select All</button>
           <button id="clearAllBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Clear All</button>
         </div>
+        <!-- Manage collection -->
+        <details class="mt-3 text-sm">
+          <summary class="cursor-pointer text-blue-600 underline">Manage Collection (Export / Import)</summary>
+          <div class="mt-2 space-y-2">
+            <p class="text-slate-600">Copy this code to save your collection. Paste it here on another device to restore it.</p>
+            <textarea id="collectionData" class="w-full border rounded p-2 text-xs font-mono h-24"></textarea>
+            <div class="flex gap-2">
+              <button id="exportBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Export</button>
+              <button id="importBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Import</button>
+            </div>
+            <p id="manageMsg" class="text-xs text-green-700"></p>
+          </div>
+        </details>
       </div>
 
       <!-- Options -->
@@ -129,6 +142,28 @@
       const data = localStorage.getItem(`moonstone_ownedSets_${faction}`);
       if (!data) return [];
       try { return JSON.parse(data); } catch { return []; }
+    }
+    function exportCollection(){
+      const all = {};
+      for(const f of FACTION_WHITELIST){
+        const d = localStorage.getItem(`moonstone_ownedSets_${f}`);
+        if(d) all[f]=JSON.parse(d);
+      }
+      const txt=JSON.stringify(all);
+      $('collectionData').value=txt;
+      navigator.clipboard.writeText(txt);
+      $('manageMsg').textContent="Collection exported to clipboard.";
+    }
+    function importCollection(){
+      try {
+        const data=JSON.parse($('collectionData').value);
+        for(const f in data){
+          localStorage.setItem(`moonstone_ownedSets_${f}`, JSON.stringify(data[f]));
+        }
+        $('manageMsg').textContent="Collection imported. Refresh or change faction to see it.";
+      } catch {
+        $('manageMsg').textContent="Invalid data pasted.";
+      }
     }
 
     /**********************
@@ -303,6 +338,8 @@
         document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=false);
         if(state.lastFaction) localStorage.removeItem(`moonstone_ownedSets_${state.lastFaction}`);
       });
+      $('exportBtn').addEventListener('click',exportCollection);
+      $('importBtn').addEventListener('click',importCollection);
       document.querySelectorAll('.genBtn').forEach(btn=>btn.addEventListener('click',()=>{
         const mode=btn.dataset.mode;
         const r=generateAdvanced(mode);
