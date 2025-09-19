@@ -42,13 +42,11 @@
     <section class="card space-y-4">
       <div>
         <label class="block text-sm font-semibold mb-1" for="factionSelect">Faction</label>
-        <select id="factionSelect" class="w-full rounded-lg border px-3 py-2">
-          <option disabled selected>Loading factions…</option>
-        </select>
+        <select id="factionSelect" class="w-full rounded-lg border px-3 py-2"></select>
       </div>
 
       <!-- Owned sets checklist -->
-      <div>
+      <div id="ownedSetsSection">
         <h2 class="text-lg font-semibold mb-2">Owned Sets</h2>
         <div id="ownedSets" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded-lg p-3 bg-slate-50"></div>
         <div class="flex gap-2 mt-2 text-sm">
@@ -97,6 +95,7 @@
           <button id="copyBtn" class="text-sm px-3 py-1 rounded-lg border hover:bg-slate-50">Copy list</button>
         </div>
         <ul id="characterList" class="list-disc pl-6 space-y-1"></ul>
+        <p id="extraNote" class="text-sm text-slate-600 mt-2 hidden">Extra sets were added to reach at least 8 models.</p>
       </div>
 
       <details class="card">
@@ -116,10 +115,10 @@
      * Constants & State
      **********************/
     const CSV_URL = 'models.csv';
-    const FACTION_WHITELIST = ['Commonwealth','Leshavult','Dominion','Shades'];
+    const FACTIONS = ['Random','Commonwealth','Leshavult','Dominion','Shades'];
     const EXCLUDED_KEYWORDS = ['bunny','urchin','sprog','pookie','jeremy','lampy','terrible musician','teacake','pidge','flay, bearer'];
 
-    const state = { rows: [], bySet: new Map(), discoveredFactions: new Set(), lastFaction: null };
+    const state = { rows: [], bySet: new Map(), discoveredFactions: new Set(), lastFaction: 'Random' };
     const $ = (id)=>document.getElementById(id);
 
     /**********************
@@ -142,28 +141,6 @@
       const data = localStorage.getItem(`moonstone_ownedSets_${faction}`);
       if (!data) return [];
       try { return JSON.parse(data); } catch { return []; }
-    }
-    function exportCollection(){
-      const all = {};
-      for(const f of FACTION_WHITELIST){
-        const d = localStorage.getItem(`moonstone_ownedSets_${f}`);
-        if(d) all[f]=JSON.parse(d);
-      }
-      const txt=JSON.stringify(all);
-      $('collectionData').value=txt;
-      navigator.clipboard.writeText(txt);
-      $('manageMsg').textContent="Collection exported to clipboard.";
-    }
-    function importCollection(){
-      try {
-        const data=JSON.parse($('collectionData').value);
-        for(const f in data){
-          localStorage.setItem(`moonstone_ownedSets_${f}`, JSON.stringify(data[f]));
-        }
-        $('manageMsg').textContent="Collection imported. Refresh or change faction to see it.";
-      } catch {
-        $('manageMsg').textContent="Invalid data pasted.";
-      }
     }
 
     /**********************
@@ -188,25 +165,27 @@
       }
       state.rows=rows; state.bySet=bySet; state.discoveredFactions=discovered;
     }
-    function populateFactionDropdown(){
-      const fs=$('factionSelect');
-      fs.innerHTML='';
-      const list=FACTION_WHITELIST.filter(f=>state.discoveredFactions.has(f));
-      for(const f of (list.length?list:[...state.discoveredFactions])){
-        const opt=document.createElement('option'); opt.value=f; opt.textContent=f; fs.appendChild(opt);
-      }
-    }
 
     /**********************
      * Owned Sets UI
      **********************/
+    function populateFactionDropdown(){
+      const fs=$('factionSelect');
+      fs.innerHTML='';
+      for(const f of FACTIONS){
+        const opt=document.createElement('option'); opt.value=f; opt.textContent=f; fs.appendChild(opt);
+      }
+      fs.value='Random';
+      toggleOwnedSets('Random');
+    }
     function showOwnedSets(faction){
       state.lastFaction=faction;
+      toggleOwnedSets(faction);
+      if(faction==='Random') return;
       const container=$('ownedSets');
       container.innerHTML='';
       const sets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
       const saved = new Set(loadOwnedSets(faction));
-
       sets.forEach(set=>{
         const id='chk_'+set.replace(/\\W+/g,'_');
         const label=document.createElement('label');
@@ -217,6 +196,9 @@
         input.addEventListener('change', ()=> saveOwnedSets(faction));
         container.appendChild(label);
       });
+    }
+    function toggleOwnedSets(faction){
+      $('ownedSetsSection').style.display = (faction==='Random') ? 'none' : 'block';
     }
     function getOwnedSets(){
       return [...document.querySelectorAll('#ownedSets input:checked')].map(i=>i.dataset.set);
@@ -237,9 +219,11 @@
     }
 
     function generateAdvanced(mode){
-      const faction=state.lastFaction;
-      if(!faction) return {sets:[],characters:[],debug:'No faction selected'};
-      const owned=getOwnedSets();
+      let faction=state.lastFaction;
+      if(faction==='Random'){
+        faction=pickRandom(['Commonwealth','Leshavult','Dominion','Shades'],1)[0];
+      }
+      const owned=(faction==='Random')?loadOwnedSets(faction):getOwnedSets();
       const allSets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
       const unowned=allSets.filter(s=>!owned.includes(s));
       let chosen=[];
@@ -263,7 +247,7 @@
         }
       }
 
-      // If healer mandatory: bias last pick towards healer set if needed
+      // Healer mandatory
       const healerMandatory=$('healerMandatory').checked;
       if(healerMandatory){
         const hasHealer=chosen.some(s=>healerInSetForFaction(s,faction));
@@ -292,7 +276,7 @@
       }
 
       return {faction,sets:chosen,characters:allChars,addedExtra,
-              debug:`Mode=${mode}\nOwned=${owned.length}\nUnowned=${unowned.length}`};
+              debug:`Mode=${mode}\nFaction=${faction}\nOwned=${owned.length}\nUnowned=${unowned.length}`};
     }
 
     /**********************
@@ -301,7 +285,7 @@
     function renderResult(r){
       $('results').classList.remove('hidden');
       $('chosenSets').innerHTML='';
-      const owned=getOwnedSets();
+      const owned=(state.lastFaction==='Random')?[]:getOwnedSets();
       r.sets.forEach(s=>{
         const span=document.createElement('span');
         span.className='pill';
@@ -326,7 +310,8 @@
         $('characterList').appendChild(li);
       });
       $('charCount').textContent=r.characters.length;
-      $('debug').textContent=r.debug + (r.addedExtra ? "\nExtra sets added to reach 8+" : "");
+      $('debug').textContent=r.debug;
+      $('extraNote').style.display = r.addedExtra ? 'block' : 'none';
     }
 
     /**********************
@@ -345,14 +330,34 @@
     function initEvents(){
       $('selectAllBtn').addEventListener('click',()=>{
         document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=true);
-        if(state.lastFaction) saveOwnedSets(state.lastFaction);
+        if(state.lastFaction!=='Random') saveOwnedSets(state.lastFaction);
       });
       $('clearAllBtn').addEventListener('click',()=>{
         document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=false);
-        if(state.lastFaction) localStorage.removeItem(`moonstone_ownedSets_${state.lastFaction}`);
+        if(state.lastFaction!=='Random') localStorage.removeItem(`moonstone_ownedSets_${state.lastFaction}`);
       });
-      $('exportBtn').addEventListener('click',exportCollection);
-      $('importBtn').addEventListener('click',importCollection);
+      $('exportBtn').addEventListener('click',()=>{
+        const all = {};
+        for(const f of ['Commonwealth','Leshavult','Dominion','Shades']){
+          const d = localStorage.getItem(`moonstone_ownedSets_${f}`);
+          if(d) all[f]=JSON.parse(d);
+        }
+        const txt=JSON.stringify(all);
+        $('collectionData').value=txt;
+        navigator.clipboard.writeText(txt);
+        $('manageMsg').textContent="Collection exported to clipboard.";
+      });
+      $('importBtn').addEventListener('click',()=>{
+        try {
+          const data=JSON.parse($('collectionData').value);
+          for(const f in data){
+            localStorage.setItem(`moonstone_ownedSets_${f}`, JSON.stringify(data[f]));
+          }
+          $('manageMsg').textContent="Collection imported. Refresh or change faction to see it.";
+        } catch {
+          $('manageMsg').textContent="Invalid data pasted.";
+        }
+      });
       document.querySelectorAll('.genBtn').forEach(btn=>btn.addEventListener('click',()=>{
         const mode=btn.dataset.mode;
         const r=generateAdvanced(mode);
