@@ -86,6 +86,7 @@
     <section id="results" class="space-y-6 hidden">
       <div class="card space-y-2">
         <h2 class="text-xl font-semibold">Chosen Sets</h2>
+        <p id="randomNote" class="text-sm text-slate-600 hidden"></p>
         <div id="chosenSets" class="flex flex-wrap gap-2"></div>
       </div>
 
@@ -220,10 +221,12 @@
 
     function generateAdvanced(mode){
       let faction=state.lastFaction;
+      let randomChosen=null;
       if(faction==='Random'){
-        faction=pickRandom(['Commonwealth','Leshavult','Dominion','Shades'],1)[0];
+        randomChosen=pickRandom(['Commonwealth','Leshavult','Dominion','Shades'],1)[0];
+        faction=randomChosen;
       }
-      const owned=(faction==='Random')?loadOwnedSets(faction):getOwnedSets();
+      const owned=loadOwnedSets(faction);
       const allSets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
       const unowned=allSets.filter(s=>!owned.includes(s));
       let chosen=[];
@@ -275,7 +278,7 @@
         allChars=uniquePreserve(allChars);
       }
 
-      return {faction,sets:chosen,characters:allChars,addedExtra,
+      return {faction,randomChosen,sets:chosen,characters:allChars,addedExtra,
               debug:`Mode=${mode}\nFaction=${faction}\nOwned=${owned.length}\nUnowned=${unowned.length}`};
     }
 
@@ -286,6 +289,14 @@
       $('results').classList.remove('hidden');
       $('chosenSets').innerHTML='';
       const owned=(state.lastFaction==='Random')?[]:getOwnedSets();
+
+      if(state.lastFaction==='Random' && r.randomChosen){
+        $('randomNote').textContent=`Random chose: ${r.randomChosen}`;
+        $('randomNote').classList.remove('hidden');
+      } else {
+        $('randomNote').classList.add('hidden');
+      }
+
       r.sets.forEach(s=>{
         const span=document.createElement('span');
         span.className='pill';
@@ -364,13 +375,4 @@
         renderResult(r);
       }));
       $('copyBtn').addEventListener('click',copyList);
-      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets(e.target.value);});
-    }
-    (async function(){
-      await loadCSV();
-      populateFactionDropdown();
-      initEvents();
-    })();
-  </script>
-</body>
-</html>
+      $('factionSelect').addEventListener('change
