@@ -5,30 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Moonstone List Generator</title>
 
-  <!-- Tailwind (CDN for quick standalone page) -->
+  <!-- Tailwind (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- PapaParse for robust CSV parsing (handles quotes/commas) -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-BYBM86ZXL3"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
+    function gtag(){dataLayer.push(arguments);} 
     gtag('js', new Date());
     gtag('config', 'G-BYBM86ZXL3');
   </script>
 
   <style>
-    /* Small niceties */
     .card { @apply bg-white/80 backdrop-blur rounded-2xl shadow p-5; }
     .pill { @apply inline-block px-3 py-1 rounded-full text-xs font-medium bg-gray-100; }
     .mono { font-variant-numeric: tabular-nums; }
+    details > summary { cursor: pointer; }
   </style>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-slate-50 to-slate-200 text-slate-800">
   <div class="max-w-3xl mx-auto px-4 py-8 space-y-6">
     <header class="space-y-2">
       <h1 class="text-3xl font-bold">Moonstone List Generator</h1>
-      <p class="text-slate-600">Pick a faction (or Random), then generate three sets. We’ll include only faction-valid characters and automatically add extra sets if needed to reach at least 8 characters. Special rules applied for Murder Bunnies, Psychopomps, and Anya/Striga Anya.</p>
+      <p class="text-slate-600">Pick a faction (or Random), generate three sets, and list only characters valid for that faction. If needed, we add extra sets until you reach at least 8 characters. Special rules applied for Murder Bunnies, Psychopomps, and Anya/Striga Anya.</p>
     </header>
 
     <section class="card space-y-4">
@@ -39,8 +42,9 @@
             <option disabled selected>Loading factions…</option>
           </select>
         </div>
-        <div class="shrink-0">
+        <div class="shrink-0 flex gap-2">
           <button id="generateBtn" class="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 disabled:opacity-50">Generate</button>
+          <button id="rerollBtn" class="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold px-5 py-2.5 disabled:opacity-50">Re‑roll</button>
         </div>
       </div>
       <p class="text-xs text-slate-500">Data source: <code class="mono">models.csv</code> in this folder (headers: Set, Character, Faction, Faction 2).</p>
@@ -61,172 +65,93 @@
         </div>
         <ul id="characterList" class="list-disc pl-6 space-y-1"></ul>
       </div>
+
+      <details class="card">
+        <summary class="text-sm font-semibold">Debug info</summary>
+        <div id="debug" class="mt-3 text-xs whitespace-pre-wrap font-mono"></div>
+      </details>
     </section>
 
     <footer class="text-xs text-slate-500 pt-8">
-      © Moonstone tools — List Generator. Works offline on GitHub Pages with a local <code class="mono">models.csv</code>.
+      © Moonstone tools — List Generator.
     </footer>
   </div>
 
   <script>
     /**********************
-     * Utility & constants
+     * Constants & State
      **********************/
     const CSV_URL = 'models.csv';
 
-    // Exclusion rules:
-    const EXCLUDED_KEYWORDS = ['murder bunn', 'psychopomp']; // case-insensitive substring match
-    const ANYA_NAMES = ['anya', 'striga anya']; // pair counts as one
+    // Only allow these 4 factions in the dropdown (plus Random), to avoid junk tokens in your CSV.
+    // Edit this list if you ever add more top-level factions.
+    const FACTION_WHITELIST = ['Commonwealth','Leshavult','Dominion','Shades'];
+
+    // Exclusion rules for characters that should never count
+    const EXCLUDED_KEYWORDS = ['murder bunn', 'psychopomp']; // case-insensitive substrings
+
+    // Anya/Striga merge rule (counts as a single choice overall)
+    const ANYA_ALIASES = ['anya', 'striga anya', 'anya / striga anya'];
+
     const RANDOM_LABEL = 'Random';
 
     const state = {
-      rows: [],             // raw rows from CSV
-      factions: [],         // unique factions discovered
-      bySet: new Map(),     // Set -> [rows]
-      ready: false
+      rows: [],          // normalized rows
+      bySet: new Map(),  // setName -> rows[]
+      discoveredFactions: new Set(), // from data
+      lastResult: null
     };
 
     const $ = (id) => document.getElementById(id);
     const factionSelect = $('factionSelect');
     const generateBtn = $('generateBtn');
+    const rerollBtn = $('rerollBtn');
     const results = $('results');
     const chosenSetsEl = $('chosenSets');
     const characterListEl = $('characterList');
     const charCountEl = $('charCount');
     const noteEl = $('note');
+    const debugEl = $('debug');
     const copyBtn = $('copyBtn');
 
     /**********************
-     * CSV loader (simple)
+     * Helpers
      **********************/
-    async function loadCSV(url) {
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) {
-        throw new Error('Could not load models.csv. Ensure it is in the same folder with the correct headers.');
-      }
-      const text = await res.text();
-      return parseCSV(text);
-    }
+    const toTitle = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+    const norm = (s) => (s||'').trim().toLowerCase();
 
-    // Extremely lightweight CSV parser (assumes no quoted commas in your data).
-    function parseCSV(text) {
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length < 2) return [];
-
-      const headers = lines[0].split(',').map(h => h.trim());
-      const idxSet = headers.indexOf('Set');
-      const idxChar = headers.indexOf('Character');
-      const idxFac1 = headers.indexOf('Faction');
-      const idxFac2 = headers.indexOf('Faction 2');
-
-      if (idxSet === -1 || idxChar === -1 || idxFac1 === -1 || idxFac2 === -1) {
-        throw new Error('Missing required headers. Expected: Set, Character, Faction, Faction 2');
-      }
-
-      const rows = [];
-      for (let i = 1; i < lines.length; i++) {
-        const parts = lines[i].split(',').map(c => c.trim());
-        if (!parts[idxSet] && !parts[idxChar]) continue;
-        rows.push({
-          Set: parts[idxSet] || '',
-          Character: parts[idxChar] || '',
-          Faction: parts[idxFac1] || '',
-          Faction2: parts[idxFac2] || ''
-        });
-      }
-      return rows;
-    }
-
-    /**********************
-     * Data prep
-     **********************/
-    function buildIndexes(rows) {
-      state.rows = rows;
-
-      // Build unique faction list
-      const factionSet = new Set();
-      for (const r of rows) {
-        if (r.Faction) factionSet.add(r.Faction);
-        if (r.Faction2) factionSet.add(r.Faction2);
-      }
-      state.factions = Array.from(factionSet).sort((a,b) => a.localeCompare(b));
-
-      // Group by Set
-      state.bySet = new Map();
-      for (const r of rows) {
-        if (!state.bySet.has(r.Set)) state.bySet.set(r.Set, []);
-        state.bySet.get(r.Set).push(r);
-      }
-    }
-
-    function populateFactionDropdown() {
-      factionSelect.innerHTML = '';
-      // Add Random
-      const optR = document.createElement('option');
-      optR.value = RANDOM_LABEL;
-      optR.textContent = RANDOM_LABEL;
-      factionSelect.appendChild(optR);
-
-      // Add discovered factions
-      for (const f of state.factions) {
-        const opt = document.createElement('option');
-        opt.value = f;
-        opt.textContent = f;
-        factionSelect.appendChild(opt);
-      }
-    }
-
-    /**********************
-     * Core logic
-     **********************/
-    function normalize(str) {
-      return (str || '').toLowerCase();
+    function splitFactionTokens(val) {
+      if (!val) return [];
+      // split by common delimiters: / , ; & |
+      return val
+        .split(/[\/,;&|]/)
+        .map(v => toTitle(v))
+        .filter(v => v.length > 0);
     }
 
     function isExcludedCharacter(name) {
-      const n = normalize(name);
+      const n = norm(name);
       return EXCLUDED_KEYWORDS.some(k => n.includes(k));
     }
 
-    function isAnyaName(name) {
-      const n = normalize(name);
-      return ANYA_NAMES.includes(n);
+    function mergeAnyaGlobally(charList) {
+      let hasAnyAnya = charList.some(c => ANYA_ALIASES.includes(norm(c)));
+      if (!hasAnyAnya) return charList;
+      // remove all anya-related entries
+      const filtered = charList.filter(c => !ANYA_ALIASES.includes(norm(c)));
+      // add the merged label once
+      filtered.push('Anya / Striga Anya');
+      return filtered;
     }
 
-    // Given a Set and chosen faction, return the list of faction-valid characters from that set,
-    // applying exclusions and the Anya/Striga rule.
-    function charactersForSetAndFaction(setName, faction) {
-      const rows = state.bySet.get(setName) || [];
-
-      // Filter rows to those that match the faction (in either column)
-      let chars = rows.filter(r => r.Faction === faction || r.Faction2 === faction)
-                      .map(r => r.Character)
-                      .filter(Boolean);
-
-      // Remove excluded (Murder Bunnies, Psychopomps)
-      chars = chars.filter(c => !isExcludedCharacter(c));
-
-      // Apply Anya/Striga merge: if both present, replace with single combined entry
-      const hasAnya = chars.some(c => isAnyaName(c));
-      if (hasAnya) {
-        const anyaSet = new Set(chars.filter(c => isAnyaName(c)).map(c => 'Anya / Striga Anya'));
-        // Remove any individual Anya variants
-        chars = chars.filter(c => !isAnyaName(c));
-        // Add the merged single label just once
-        if (anyaSet.size > 0) chars.push('Anya / Striga Anya');
+    function uniquePreserveOrder(arr) {
+      const seen = new Set();
+      const out = [];
+      for (const x of arr) {
+        const key = norm(x);
+        if (!seen.has(key)) { seen.add(key); out.push(x); }
       }
-
-      return chars;
-    }
-
-    // Sets eligible for a given faction: at least one faction-valid character present after exclusions/merges.
-    function eligibleSetsForFaction(faction) {
-      const eligible = [];
-      for (const [setName] of state.bySet.entries()) {
-        const chars = charactersForSetAndFaction(setName, faction);
-        if (chars.length > 0) eligible.push(setName);
-      }
-      return eligible;
+      return out;
     }
 
     function pickRandom(arr, n, rng = Math.random) {
@@ -240,28 +165,104 @@
 
     function chooseFaction(requested) {
       if (requested === RANDOM_LABEL) {
-        // Uniform random among discovered factions
-        const i = Math.floor(Math.random() * state.factions.length);
-        return state.factions[i];
+        const list = Array.from(state.discoveredFactions).filter(f => FACTION_WHITELIST.includes(f));
+        const pool = list.length ? list : FACTION_WHITELIST; // fallback to whitelist if none discovered
+        const i = Math.floor(Math.random() * pool.length);
+        return pool[i];
       }
       return requested;
     }
 
-    function generateListForFaction(requestedFaction) {
-      const chosenFaction = chooseFaction(requestedFaction);
+    /**********************
+     * Load & Normalize CSV
+     **********************/
+    async function loadCSV() {
+      const res = await fetch(CSV_URL, { cache: 'no-store' });
+      if (!res.ok) throw new Error('Could not load models.csv');
+      const text = await res.text();
+      const parsed = Papa.parse(text, {
+        header: true,
+        skipEmptyLines: 'greedy',
+        transformHeader: h => h.trim(),
+      });
+      if (parsed.errors && parsed.errors.length) {
+        console.warn('CSV parse errors:', parsed.errors);
+      }
+      const rowsRaw = parsed.data || [];
 
-      const eligibleSets = eligibleSetsForFaction(chosenFaction);
-      if (eligibleSets.length === 0) {
-        return {
-          faction: chosenFaction,
-          sets: [],
-          characters: [],
-          addedExtra: false,
-          message: 'No eligible sets for this faction in the data.'
-        };
+      // Normalize rows
+      const rows = [];
+      const bySet = new Map();
+      const discovered = new Set();
+
+      for (const r of rowsRaw) {
+        const SetName = (r['Set'] ?? '').toString().trim();
+        const Character = (r['Character'] ?? '').toString().trim();
+        const f1 = splitFactionTokens((r['Faction'] ?? '').toString());
+        const f2 = splitFactionTokens((r['Faction 2'] ?? r['Faction2'] ?? '').toString());
+        if (!SetName || !Character) continue;
+
+        const factions = uniquePreserveOrder([...f1, ...f2]);
+        factions.forEach(f => discovered.add(f));
+
+        const row = { Set: SetName, Character, factions };
+        rows.push(row);
+        if (!bySet.has(SetName)) bySet.set(SetName, []);
+        bySet.get(SetName).push(row);
       }
 
-      // Start with 3 sets, then add until >= 8 characters.
+      state.rows = rows;
+      state.bySet = bySet;
+      state.discoveredFactions = discovered;
+    }
+
+    function populateFactionDropdown() {
+      factionSelect.innerHTML = '';
+      const optR = document.createElement('option');
+      optR.value = RANDOM_LABEL; optR.textContent = RANDOM_LABEL; factionSelect.appendChild(optR);
+
+      // Only show factions that are in the whitelist and present in the data.
+      const list = FACTION_WHITELIST.filter(f => state.discoveredFactions.has(f));
+      // If the CSV didn’t use the expected naming, fall back to whatever was discovered (sorted), but this is noisy.
+      const finalList = list.length ? list : Array.from(state.discoveredFactions).sort((a,b)=>a.localeCompare(b));
+
+      for (const f of finalList) {
+        const opt = document.createElement('option');
+        opt.value = f; opt.textContent = f; factionSelect.appendChild(opt);
+      }
+    }
+
+    /**********************
+     * Core logic
+     **********************/
+    function charactersForSetAndFaction(setName, chosenFaction) {
+      const rows = state.bySet.get(setName) || [];
+      // Filter to rows whose factions contain the chosen faction (case-insensitive)
+      let chars = rows
+        .filter(r => r.factions.map(norm).includes(norm(chosenFaction)))
+        .map(r => r.Character)
+        .filter(Boolean)
+        .filter(c => !isExcludedCharacter(c));
+      return chars;
+    }
+
+    function eligibleSetsForFaction(chosenFaction) {
+      const eligible = [];
+      for (const [setName] of state.bySet.entries()) {
+        const chars = charactersForSetAndFaction(setName, chosenFaction);
+        if (chars.length > 0) eligible.push(setName);
+      }
+      return eligible;
+    }
+
+    function generateListForFaction(requestedFaction) {
+      const chosenFaction = chooseFaction(requestedFaction);
+      const eligibleSets = eligibleSetsForFaction(chosenFaction);
+
+      if (eligibleSets.length === 0) {
+        return { faction: chosenFaction, sets: [], characters: [], addedExtra: false, message: 'No eligible sets for this faction in the data.' };
+      }
+
       const chosen = pickRandom(eligibleSets, Math.min(3, eligibleSets.length));
       let allChars = [];
       for (const s of chosen) {
@@ -273,33 +274,23 @@
 
       while (allChars.length < 8 && remaining.length > 0) {
         addedExtra = true;
-        // add one more set
         const next = pickRandom(remaining, 1)[0];
         chosen.push(next);
-        // remove from remaining
         const ix = remaining.indexOf(next);
         if (ix >= 0) remaining.splice(ix, 1);
-        // add chars
         allChars.push(...charactersForSetAndFaction(next, chosenFaction));
       }
 
-      // De-duplicate characters while preserving order
-      const seen = new Set();
-      const uniqueChars = [];
-      for (const c of allChars) {
-        const key = c.toLowerCase();
-        if (!seen.has(key)) {
-          seen.add(key);
-          uniqueChars.push(c);
-        }
-      }
+      // Global merge for Anya/Striga and de-duplication
+      allChars = mergeAnyaGlobally(allChars);
+      const uniqueChars = uniquePreserveOrder(allChars);
 
       return {
         faction: chosenFaction,
         sets: chosen,
         characters: uniqueChars,
         addedExtra,
-        message: uniqueChars.length < 8 ? 'Could not reach 8 characters with available sets.' : ''
+        message: uniqueChars.length < 8 ? 'Could not reach 8 characters with available sets (after exclusions). Consider widening the faction or adding more sets.' : ''
       };
     }
 
@@ -309,7 +300,6 @@
     function renderResult(result, requestedFaction) {
       results.classList.remove('hidden');
 
-      // Note banner
       if (result.addedExtra) {
         noteEl.textContent = 'Fewer than 8 characters were found from the first three sets, so I added an extra set.';
         noteEl.classList.remove('hidden');
@@ -320,7 +310,6 @@
         noteEl.classList.add('hidden');
       }
 
-      // Sets
       chosenSetsEl.innerHTML = '';
       result.sets.forEach(s => {
         const span = document.createElement('span');
@@ -329,7 +318,6 @@
         chosenSetsEl.appendChild(span);
       });
 
-      // Characters
       characterListEl.innerHTML = '';
       result.characters.forEach(c => {
         const li = document.createElement('li');
@@ -338,14 +326,17 @@
       });
       charCountEl.textContent = result.characters.length;
 
-      // Analytics event
-      try {
-        gtag('event', 'generate', {
-          event_category: 'list_generator',
-          event_label: `Requested:${requestedFaction} -> Chosen:${result.faction}`,
-          value: result.characters.length
-        });
-      } catch {}
+      // Debug info
+      const eligCount = eligibleSetsForFaction(result.faction).length;
+      debugEl.textContent = [
+        `Requested: ${requestedFaction}`,
+        `Chosen faction: ${result.faction}`,
+        `Eligible sets for faction: ${eligCount}`,
+        `Sets chosen: ${result.sets.length}`,
+        `Characters listed: ${result.characters.length}`
+      ].join('\n');
+
+      try { gtag('event', 'generate', { event_category: 'list_generator', event_label: `Req:${requestedFaction} -> Chosen:${result.faction}`, value: result.characters.length }); } catch {}
     }
 
     function copyCharactersToClipboard() {
@@ -367,27 +358,28 @@
     }
 
     /**********************
-     * Wire-up
+     * Wire-up & Init
      **********************/
     copyBtn.addEventListener('click', copyCharactersToClipboard);
 
-    generateBtn.addEventListener('click', () => {
-      if (!state.ready) return;
+    function runGenerate() {
       const requested = factionSelect.value;
       const result = generateListForFaction(requested);
+      state.lastResult = result;
       renderResult(result, requested);
-    });
+    }
+
+    generateBtn.addEventListener('click', runGenerate);
+    rerollBtn.addEventListener('click', runGenerate);
 
     (async function init() {
       try {
-        const rows = await loadCSV(CSV_URL);
-        buildIndexes(rows);
+        await loadCSV();
         populateFactionDropdown();
-        state.ready = true;
-        generateBtn.disabled = false;
+        generateBtn.disabled = false; rerollBtn.disabled = false;
       } catch (err) {
         factionSelect.innerHTML = '<option>Error loading models.csv</option>';
-        generateBtn.disabled = true;
+        generateBtn.disabled = true; rerollBtn.disabled = true;
         console.error(err);
         alert(err.message);
       }
@@ -395,3 +387,4 @@
   </script>
 </body>
 </html>
+
