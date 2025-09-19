@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moonstone List Generator — Advanced</title>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- PapaParse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BYBM86ZXL3"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);} 
+    gtag('js', new Date());
+    gtag('config', 'G-BYBM86ZXL3');
+  </script>
+
+  <style>
+    .card { @apply bg-white/80 backdrop-blur rounded-2xl shadow p-5; }
+    .pill { @apply inline-block px-3 py-1 rounded-full text-xs font-medium bg-gray-100; }
+    .mono { font-variant-numeric: tabular-nums; }
+    details > summary { cursor: pointer; }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-50 to-slate-200 text-slate-800">
+  <div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
+    <header class="space-y-2">
+      <h1 class="text-3xl font-bold">Moonstone List Generator — Advanced</h1>
+      <p class="text-slate-600">
+        Select the sets you own for a faction, then generate lists using only those. 
+        Optionally allow 1 or 2 extra “Purchase suggestion” boxes to be added.
+      </p>
+    </header>
+
+    <!-- Faction selection -->
+    <section class="card space-y-4">
+      <div>
+        <label class="block text-sm font-semibold mb-1" for="factionSelect">Faction</label>
+        <select id="factionSelect" class="w-full rounded-lg border px-3 py-2">
+          <option disabled selected>Loading factions…</option>
+        </select>
+      </div>
+
+      <!-- Owned sets checklist -->
+      <div>
+        <h2 class="text-lg font-semibold mb-2">Owned Sets</h2>
+        <div id="ownedSets" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded-lg p-3 bg-slate-50"></div>
+        <div class="flex gap-2 mt-2 text-sm">
+          <button id="selectAllBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Select All</button>
+          <button id="clearAllBtn" class="px-3 py-1 rounded border hover:bg-slate-100">Clear All</button>
+        </div>
+      </div>
+
+      <!-- Generation buttons -->
+      <div class="flex flex-wrap gap-2">
+        <button data-mode="owned" class="genBtn rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5">Owned Only</button>
+        <button data-mode="add1" class="genBtn rounded-xl bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-2.5">Add 1 Box Max</button>
+        <button data-mode="add2" class="genBtn rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold px-5 py-2.5">Add 2 Boxes Max</button>
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section id="results" class="space-y-6 hidden">
+      <div class="card space-y-2">
+        <h2 class="text-xl font-semibold">Chosen Sets</h2>
+        <div id="chosenSets" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <div class="card space-y-2">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Characters (<span id="charCount">0</span>)</h2>
+          <button id="copyBtn" class="text-sm px-3 py-1 rounded-lg border hover:bg-slate-50">Copy list</button>
+        </div>
+        <ul id="characterList" class="list-disc pl-6 space-y-1"></ul>
+      </div>
+
+      <details class="card">
+        <summary class="text-sm font-semibold">Debug info</summary>
+        <div id="debug" class="mt-3 text-xs whitespace-pre-wrap font-mono"></div>
+      </details>
+    </section>
+
+    <footer class="text-xs text-slate-500 pt-8 space-y-2">
+      <p>© Moonstone tools — Advanced Generator.</p>
+      <p><a href="index.html" class="underline text-blue-600">Back to Simple Version</a></p>
+    </footer>
+  </div>
+
+  <script>
+    /**********************
+     * Constants & State
+     **********************/
+    const CSV_URL = 'models.csv';
+    const FACTION_WHITELIST = ['Commonwealth','Leshavult','Dominion','Shades'];
+    const EXCLUDED_KEYWORDS = ['bunny','urchin','sprog','pookie','jeremy','lampy','terrible musician','teacake','pidge','flay, bearer'];
+
+    const state = { rows: [], bySet: new Map(), discoveredFactions: new Set(), lastFaction: null };
+    const $ = (id)=>document.getElementById(id);
+
+    /**********************
+     * Helpers
+     **********************/
+    const norm = s=>(s||'').trim().toLowerCase();
+    function splitTokens(val){ return (val||'').split(/[\\/,;&|]/).map(v=>v.trim()).filter(Boolean); }
+    function isExcludedCharacter(name){ return EXCLUDED_KEYWORDS.some(k=>norm(name).includes(k)); }
+    function uniquePreserve(arr){ const seen=new Set(), out=[]; for(const x of arr){ if(!seen.has(norm(x))){ seen.add(norm(x)); out.push(x);} } return out; }
+    function pickRandom(arr,n){ const c=arr.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]];} return c.slice(0,n); }
+
+    /**********************
+     * CSV Load
+     **********************/
+    async function loadCSV(){
+      const res=await fetch(CSV_URL,{cache:'no-store'});
+      const text=await res.text();
+      const parsed=Papa.parse(text,{header:true,skipEmptyLines:'greedy'});
+      const rows=[]; const bySet=new Map(); const discovered=new Set();
+      for(const r of parsed.data){
+        const set=(r['Set']||'').trim();
+        const char=(r['Character']||'').trim();
+        if(!set||!char) continue;
+        const factions=[...splitTokens(r['Faction']),...splitTokens(r['Faction 2'])];
+        factions.forEach(f=>discovered.add(f));
+        const healer=norm(r['Healer'])==='yes';
+        const row={Set:set,Character:char,factions,Healer:healer};
+        rows.push(row);
+        if(!bySet.has(set)) bySet.set(set,[]);
+        bySet.get(set).push(row);
+      }
+      state.rows=rows; state.bySet=bySet; state.discoveredFactions=discovered;
+    }
+    function populateFactionDropdown(){
+      const fs=$('factionSelect');
+      fs.innerHTML='';
+      const list=FACTION_WHITELIST.filter(f=>state.discoveredFactions.has(f));
+      for(const f of (list.length?list:[...state.discoveredFactions])){
+        const opt=document.createElement('option'); opt.value=f; opt.textContent=f; fs.appendChild(opt);
+      }
+    }
+
+    /**********************
+     * Owned Sets UI
+     **********************/
+    function showOwnedSets(faction){
+      state.lastFaction=faction;
+      const container=$('ownedSets');
+      container.innerHTML='';
+      const sets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
+      sets.forEach(set=>{
+        const id='chk_'+set.replace(/\\W+/g,'_');
+        const label=document.createElement('label');
+        label.className="flex items-center gap-2 text-sm";
+        label.innerHTML=`<input type="checkbox" id="${id}" data-set="${set}"> ${set}`;
+        container.appendChild(label);
+      });
+    }
+    function getOwnedSets(){
+      return [...document.querySelectorAll('#ownedSets input:checked')].map(i=>i.dataset.set);
+    }
+
+    /**********************
+     * Core logic
+     **********************/
+    function charactersForSetAndFaction(set,faction){
+      const rows=state.bySet.get(set)||[];
+      return rows.filter(r=>r.factions.map(norm).includes(norm(faction)))
+                 .map(r=>r.Character)
+                 .filter(c=>c&&!isExcludedCharacter(c));
+    }
+    function generateAdvanced(mode){
+      const faction=state.lastFaction;
+      if(!faction) return {sets:[],characters:[],debug:'No faction selected'};
+      const owned=getOwnedSets();
+      const allSets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
+      const unowned=allSets.filter(s=>!owned.includes(s));
+
+      let chosen=[];
+      if(mode==='owned'){
+        chosen = pickRandom(owned.length?owned:allSets, Math.min(3,owned.length?owned.length:allSets.length));
+      } else if(mode==='add1'){
+        chosen = pickRandom(owned, Math.min(2,owned.length));
+        if(chosen.length<3 && unowned.length>0){
+          chosen.push(pickRandom(unowned,1)[0]);
+        }
+      } else if(mode==='add2'){
+        chosen = pickRandom(owned, Math.min(1,owned.length));
+        const needed=3-chosen.length;
+        chosen=chosen.concat(pickRandom(unowned, Math.min(needed,2)));
+      }
+
+      // Characters
+      let allChars=chosen.flatMap(s=>charactersForSetAndFaction(s,faction));
+      allChars=uniquePreserve(allChars);
+
+      return {faction,sets:chosen,characters:allChars,debug:`Mode=${mode}\\nOwned=${owned.length}\\nUnowned=${unowned.length}`};
+    }
+
+    /**********************
+     * Render
+     **********************/
+    function renderResult(r){
+      $('results').classList.remove('hidden');
+      $('chosenSets').innerHTML='';
+      r.sets.forEach(s=>{
+        const span=document.createElement('span');
+        span.className='pill';
+        const owned=getOwnedSets();
+        if(!owned.includes(s)){
+          span.textContent='✨ '+s+' (Purchase suggestion)';
+          span.classList.add('bg-yellow-100','text-yellow-800');
+        } else {
+          span.textContent=s;
+        }
+        $('chosenSets').appendChild(span);
+      });
+
+      $('characterList').innerHTML='';
+      r.characters.forEach(c=>{
+        const li=document.createElement('li');
+        li.textContent=c;
+        $('characterList').appendChild(li);
+      });
+      $('charCount').textContent=r.characters.length;
+      $('debug').textContent=r.debug;
+    }
+
+    /**********************
+     * Copy
+     **********************/
+    function copyList(){
+      const items=[...document.querySelectorAll('#characterList li')].map(li=>'• '+li.textContent);
+      const sets=[...document.querySelectorAll('#chosenSets span')].map(s=>s.textContent);
+      const txt=['Moonstone List Generator (Advanced)','','Sets:',...sets.map(s=>'- '+s),'',`Characters (${items.length}):`,...items].join('\\n');
+      navigator.clipboard.writeText(txt).then(()=>{ $('copyBtn').textContent='Copied!'; setTimeout(()=>{$('copyBtn').textContent='Copy list';},1200); });
+    }
+
+    /**********************
+     * Init
+     **********************/
+    function initEvents(){
+      $('selectAllBtn').addEventListener('click',()=>{document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=true);});
+      $('clearAllBtn').addEventListener('click',()=>{document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=false);});
+      document.querySelectorAll('.genBtn').forEach(btn=>btn.addEventListener('click',()=>{
+        const mode=btn.dataset.mode;
+        const r=generateAdvanced(mode);
+        renderResult(r);
+      }));
+      $('copyBtn').addEventListener('click',copyList);
+      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets(e.target.value);});
+    }
+    (async function(){
+      await loadCSV();
+      populateFactionDropdown();
+      initEvents();
+    })();
+  </script>
+</body>
+</html>
