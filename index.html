@@ -8,7 +8,7 @@
   <!-- Tailwind (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- PapaParse for robust CSV parsing (handles quotes/commas) -->
+  <!-- PapaParse for CSV parsing -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <!-- Google tag (gtag.js) -->
@@ -31,7 +31,7 @@
   <div class="max-w-3xl mx-auto px-4 py-8 space-y-6">
     <header class="space-y-2">
       <h1 class="text-3xl font-bold">Moonstone List Generator</h1>
-      <p class="text-slate-600">Pick a faction (or Random), generate three sets, and list only characters valid for that faction. If needed, we add extra sets until you reach at least 8 characters. Special rules applied for Murder Bunnies, Psychopomps, and Anya/Striga Anya.</p>
+      <p class="text-slate-600">Pick a faction (or Random), generate three sets, and list only characters valid for that faction. Optional: require a healer to be included. If needed, extra sets are added only to reach at least 8 characters. Murder Bunnies, Psychopomps, and Anya/Striga Anya handled automatically.</p>
     </header>
 
     <section class="card space-y-4">
@@ -44,10 +44,14 @@
         </div>
         <div class="shrink-0 flex gap-2">
           <button id="generateBtn" class="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 disabled:opacity-50">Generate</button>
-          <button id="rerollBtn" class="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold px-5 py-2.5 disabled:opacity-50">Re‑roll</button>
+          <button id="rerollBtn" class="rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold px-5 py-2.5 disabled:opacity-50">Re-roll</button>
         </div>
       </div>
-      <p class="text-xs text-slate-500">Data source: <code class="mono">models.csv</code> in this folder (headers: Set, Character, Faction, Faction 2).</p>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" id="healerMandatory" />
+        Healer mandatory
+      </label>
+      <p class="text-xs text-slate-500">Data source: <code class="mono">models.csv</code> in this folder (headers: Set, Character, Faction, Faction 2, Healer).</p>
     </section>
 
     <section id="results" class="space-y-6 hidden">
@@ -82,309 +86,129 @@
      * Constants & State
      **********************/
     const CSV_URL = 'models.csv';
-
-    // Only allow these 4 factions in the dropdown (plus Random), to avoid junk tokens in your CSV.
-    // Edit this list if you ever add more top-level factions.
     const FACTION_WHITELIST = ['Commonwealth','Leshavult','Dominion','Shades'];
-
-    // Exclusion rules for characters that should never count
-    const EXCLUDED_KEYWORDS = ['murder bunn', 'psychopomp']; // case-insensitive substrings
-
-    // Anya/Striga merge rule (counts as a single choice overall)
+    const EXCLUDED_KEYWORDS = ['murder bunn', 'psychopomp'];
     const ANYA_ALIASES = ['anya', 'striga anya', 'anya / striga anya'];
-
     const RANDOM_LABEL = 'Random';
 
-    const state = {
-      rows: [],          // normalized rows
-      bySet: new Map(),  // setName -> rows[]
-      discoveredFactions: new Set(), // from data
-      lastResult: null
-    };
-
+    const state = { rows: [], bySet: new Map(), discoveredFactions: new Set(), lastResult: null };
     const $ = (id) => document.getElementById(id);
-    const factionSelect = $('factionSelect');
-    const generateBtn = $('generateBtn');
-    const rerollBtn = $('rerollBtn');
-    const results = $('results');
-    const chosenSetsEl = $('chosenSets');
-    const characterListEl = $('characterList');
-    const charCountEl = $('charCount');
-    const noteEl = $('note');
-    const debugEl = $('debug');
-    const copyBtn = $('copyBtn');
 
     /**********************
      * Helpers
      **********************/
-    const toTitle = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
     const norm = (s) => (s||'').trim().toLowerCase();
-
-    function splitFactionTokens(val) {
-      if (!val) return [];
-      // split by common delimiters: / , ; & |
-      return val
-        .split(/[\/,;&|]/)
-        .map(v => toTitle(v))
-        .filter(v => v.length > 0);
-    }
-
-    function isExcludedCharacter(name) {
-      const n = norm(name);
-      return EXCLUDED_KEYWORDS.some(k => n.includes(k));
-    }
-
-    function mergeAnyaGlobally(charList) {
-      let hasAnyAnya = charList.some(c => ANYA_ALIASES.includes(norm(c)));
-      if (!hasAnyAnya) return charList;
-      // remove all anya-related entries
-      const filtered = charList.filter(c => !ANYA_ALIASES.includes(norm(c)));
-      // add the merged label once
-      filtered.push('Anya / Striga Anya');
-      return filtered;
-    }
-
-    function uniquePreserveOrder(arr) {
-      const seen = new Set();
-      const out = [];
-      for (const x of arr) {
-        const key = norm(x);
-        if (!seen.has(key)) { seen.add(key); out.push(x); }
-      }
-      return out;
-    }
-
-    function pickRandom(arr, n, rng = Math.random) {
-      const copy = arr.slice();
-      for (let i = copy.length - 1; i > 0; i--) {
-        const j = Math.floor(rng() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-      }
-      return copy.slice(0, n);
-    }
-
-    function chooseFaction(requested) {
-      if (requested === RANDOM_LABEL) {
-        const list = Array.from(state.discoveredFactions).filter(f => FACTION_WHITELIST.includes(f));
-        const pool = list.length ? list : FACTION_WHITELIST; // fallback to whitelist if none discovered
-        const i = Math.floor(Math.random() * pool.length);
-        return pool[i];
-      }
-      return requested;
-    }
+    function splitTokens(val){ return (val||'').split(/[\\/,;&|]/).map(v=>v.trim()).filter(Boolean); }
+    function isExcludedCharacter(name){ return EXCLUDED_KEYWORDS.some(k => norm(name).includes(k)); }
+    function mergeAnyaGlobally(chars){ return chars.some(c=>ANYA_ALIASES.includes(norm(c))) ? [...chars.filter(c=>!ANYA_ALIASES.includes(norm(c))), 'Anya / Striga Anya'] : chars; }
+    function uniquePreserve(arr){ const seen=new Set(), out=[]; for(const x of arr){ if(!seen.has(norm(x))){ seen.add(norm(x)); out.push(x); } } return out; }
+    function pickRandom(arr,n){ const c=arr.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]];} return c.slice(0,n); }
+    function chooseFaction(req){ if(req===RANDOM_LABEL){ const pool=[...state.discoveredFactions].filter(f=>FACTION_WHITELIST.includes(f)); return pool[Math.floor(Math.random()*pool.length)]||FACTION_WHITELIST[0]; } return req; }
 
     /**********************
-     * Load & Normalize CSV
+     * CSV load
      **********************/
-    async function loadCSV() {
-      const res = await fetch(CSV_URL, { cache: 'no-store' });
-      if (!res.ok) throw new Error('Could not load models.csv');
-      const text = await res.text();
-      const parsed = Papa.parse(text, {
-        header: true,
-        skipEmptyLines: 'greedy',
-        transformHeader: h => h.trim(),
-      });
-      if (parsed.errors && parsed.errors.length) {
-        console.warn('CSV parse errors:', parsed.errors);
-      }
-      const rowsRaw = parsed.data || [];
-
-      // Normalize rows
-      const rows = [];
-      const bySet = new Map();
-      const discovered = new Set();
-
-      for (const r of rowsRaw) {
-        const SetName = (r['Set'] ?? '').toString().trim();
-        const Character = (r['Character'] ?? '').toString().trim();
-        const f1 = splitFactionTokens((r['Faction'] ?? '').toString());
-        const f2 = splitFactionTokens((r['Faction 2'] ?? r['Faction2'] ?? '').toString());
-        if (!SetName || !Character) continue;
-
-        const factions = uniquePreserveOrder([...f1, ...f2]);
-        factions.forEach(f => discovered.add(f));
-
-        const row = { Set: SetName, Character, factions };
+    async function loadCSV(){
+      const res=await fetch(CSV_URL,{cache:'no-store'}); const text=await res.text();
+      const parsed=Papa.parse(text,{header:true,skipEmptyLines:'greedy'});
+      const rows=[]; const bySet=new Map(); const discovered=new Set();
+      for(const r of parsed.data){
+        const set=(r['Set']||'').trim(); const char=(r['Character']||'').trim();
+        if(!set||!char) continue;
+        const factions=[...splitTokens(r['Faction']),...splitTokens(r['Faction 2'])];
+        factions.forEach(f=>discovered.add(f));
+        const healer=norm(r['Healer'])==='yes';
+        const row={Set:set,Character:char,factions,Healer:healer};
         rows.push(row);
-        if (!bySet.has(SetName)) bySet.set(SetName, []);
-        bySet.get(SetName).push(row);
+        if(!bySet.has(set)) bySet.set(set,[]); bySet.get(set).push(row);
       }
-
-      state.rows = rows;
-      state.bySet = bySet;
-      state.discoveredFactions = discovered;
+      state.rows=rows; state.bySet=bySet; state.discoveredFactions=discovered;
     }
-
-    function populateFactionDropdown() {
-      factionSelect.innerHTML = '';
-      const optR = document.createElement('option');
-      optR.value = RANDOM_LABEL; optR.textContent = RANDOM_LABEL; factionSelect.appendChild(optR);
-
-      // Only show factions that are in the whitelist and present in the data.
-      const list = FACTION_WHITELIST.filter(f => state.discoveredFactions.has(f));
-      // If the CSV didn’t use the expected naming, fall back to whatever was discovered (sorted), but this is noisy.
-      const finalList = list.length ? list : Array.from(state.discoveredFactions).sort((a,b)=>a.localeCompare(b));
-
-      for (const f of finalList) {
-        const opt = document.createElement('option');
-        opt.value = f; opt.textContent = f; factionSelect.appendChild(opt);
+    function populateFactionDropdown(){
+      const fs=$('factionSelect'); fs.innerHTML='';
+      const optR=document.createElement('option'); optR.value=RANDOM_LABEL; optR.textContent=RANDOM_LABEL; fs.appendChild(optR);
+      const list=FACTION_WHITELIST.filter(f=>state.discoveredFactions.has(f));
+      for(const f of (list.length?list:[...state.discoveredFactions])){
+        const opt=document.createElement('option'); opt.value=f; opt.textContent=f; fs.appendChild(opt);
       }
     }
 
     /**********************
      * Core logic
      **********************/
-    function charactersForSetAndFaction(setName, chosenFaction) {
-      const rows = state.bySet.get(setName) || [];
-      // Filter to rows whose factions contain the chosen faction (case-insensitive)
-      let chars = rows
-        .filter(r => r.factions.map(norm).includes(norm(chosenFaction)))
-        .map(r => r.Character)
-        .filter(Boolean)
-        .filter(c => !isExcludedCharacter(c));
-      return chars;
+    function charactersForSetAndFaction(set,faction){
+      const rows=state.bySet.get(set)||[];
+      return rows.filter(r=>r.factions.map(norm).includes(norm(faction))).map(r=>r.Character).filter(c=>c&&!isExcludedCharacter(c));
     }
-
-    function eligibleSetsForFaction(chosenFaction) {
-      const eligible = [];
-      for (const [setName] of state.bySet.entries()) {
-        const chars = charactersForSetAndFaction(setName, chosenFaction);
-        if (chars.length > 0) eligible.push(setName);
-      }
-      return eligible;
+    function healerInSetForFaction(set,faction){
+      const rows=state.bySet.get(set)||[];
+      return rows.some(r=>r.factions.map(norm).includes(norm(faction)) && r.Healer);
     }
-
-    function generateListForFaction(requestedFaction) {
-      const chosenFaction = chooseFaction(requestedFaction);
-      const eligibleSets = eligibleSetsForFaction(chosenFaction);
-
-      if (eligibleSets.length === 0) {
-        return { faction: chosenFaction, sets: [], characters: [], addedExtra: false, message: 'No eligible sets for this faction in the data.' };
-      }
-
-      const chosen = pickRandom(eligibleSets, Math.min(3, eligibleSets.length));
-      let allChars = [];
-      for (const s of chosen) {
-        allChars.push(...charactersForSetAndFaction(s, chosenFaction));
-      }
-
-      let addedExtra = false;
-      const remaining = eligibleSets.filter(s => !chosen.includes(s));
-
-      while (allChars.length < 8 && remaining.length > 0) {
-        addedExtra = true;
-        const next = pickRandom(remaining, 1)[0];
-        chosen.push(next);
-        const ix = remaining.indexOf(next);
-        if (ix >= 0) remaining.splice(ix, 1);
-        allChars.push(...charactersForSetAndFaction(next, chosenFaction));
-      }
-
-      // Global merge for Anya/Striga and de-duplication
-      allChars = mergeAnyaGlobally(allChars);
-      const uniqueChars = uniquePreserveOrder(allChars);
-
-      return {
-        faction: chosenFaction,
-        sets: chosen,
-        characters: uniqueChars,
-        addedExtra,
-        message: uniqueChars.length < 8 ? 'Could not reach 8 characters with available sets (after exclusions). Consider widening the faction or adding more sets.' : ''
-      };
+    function eligibleSetsForFaction(faction){
+      return [...state.bySet.keys()].filter(set=>charactersForSetAndFaction(set,faction).length>0);
+    }
+    function generateList(reqFaction){
+      const faction=chooseFaction(reqFaction); const healerMandatory=$('healerMandatory').checked;
+      let elig=eligibleSetsForFaction(faction);
+      if(!elig.length) return {faction,sets:[],characters:[],addedExtra:false,message:'No sets for faction'};
+      const firstTwo=pickRandom(elig,Math.min(2,elig.length)); let chosen=[...firstTwo];
+      const hasHealer=state.rows.some(r=>chosen.includes(r.Set)&&r.Healer&&r.factions.map(norm).includes(norm(faction)));
+      let thirdPool=elig.filter(s=>!chosen.includes(s));
+      if(healerMandatory && !hasHealer){ thirdPool=thirdPool.filter(s=>healerInSetForFaction(s,faction)); }
+      if(thirdPool.length){ chosen.push(pickRandom(thirdPool,1)[0]); }
+      let allChars=chosen.flatMap(s=>charactersForSetAndFaction(s,faction));
+      let addedExtra=false; let remaining=elig.filter(s=>!chosen.includes(s));
+      while(allChars.length<8 && remaining.length){ addedExtra=true; const next=pickRandom(remaining,1)[0]; chosen.push(next); remaining=remaining.filter(x=>x!==next); allChars.push(...charactersForSetAndFaction(next,faction)); }
+      allChars=uniquePreserve(mergeAnyaGlobally(allChars));
+      const healerIncluded=allChars.some(c=>{const r=state.rows.find(row=>row.Character===c&&row.Healer);return r&&r.factions.map(norm).includes(norm(faction));});
+      return {faction,sets:chosen,characters:allChars,addedExtra,message:(healerMandatory&&!healerIncluded)?'Could not satisfy healer requirement':''};
     }
 
     /**********************
      * Render
      **********************/
-    function renderResult(result, requestedFaction) {
-      results.classList.remove('hidden');
+    function renderResult(r,req){
+      $('results').classList.remove('hidden');
+      if(r.addedExtra){ $('note').textContent='Added extra sets to reach at least 8 characters.'; $('note').classList.remove('hidden'); }
+      else if(r.message){ $('note').textContent=r.message; $('note').classList.remove('hidden'); }
+      else $('note').classList.add('hidden');
 
-      if (result.addedExtra) {
-        noteEl.textContent = 'Fewer than 8 characters were found from the first three sets, so I added an extra set.';
-        noteEl.classList.remove('hidden');
-      } else if (result.message) {
-        noteEl.textContent = result.message;
-        noteEl.classList.remove('hidden');
-      } else {
-        noteEl.classList.add('hidden');
-      }
-
-      chosenSetsEl.innerHTML = '';
-      result.sets.forEach(s => {
-        const span = document.createElement('span');
-        span.className = 'pill';
-        span.textContent = s;
-        chosenSetsEl.appendChild(span);
+      $('chosenSets').innerHTML='';
+      r.sets.forEach(s=>{
+        const span=document.createElement('span');
+        span.className='pill';
+        span.textContent=s;
+        $('chosenSets').appendChild(span);
       });
 
-      characterListEl.innerHTML = '';
-      result.characters.forEach(c => {
-        const li = document.createElement('li');
-        li.textContent = c;
-        characterListEl.appendChild(li);
+      $('characterList').innerHTML='';
+      r.characters.forEach(c=>{
+        const li=document.createElement('li');
+        const healerRow = state.rows.find(row =>
+          row.Character === c &&
+          row.Healer &&
+          row.factions.map(norm).includes(norm(r.faction))
+        );
+        if (healerRow) {
+          li.innerHTML = `<span class="text-green-700 font-semibold">✚ ${c}</span>`;
+        } else {
+          li.textContent = c;
+        }
+        $('characterList').appendChild(li);
       });
-      charCountEl.textContent = result.characters.length;
+      $('charCount').textContent=r.characters.length;
 
-      // Debug info
-      const eligCount = eligibleSetsForFaction(result.faction).length;
-      debugEl.textContent = [
-        `Requested: ${requestedFaction}`,
-        `Chosen faction: ${result.faction}`,
-        `Eligible sets for faction: ${eligCount}`,
-        `Sets chosen: ${result.sets.length}`,
-        `Characters listed: ${result.characters.length}`
-      ].join('\n');
-
-      try { gtag('event', 'generate', { event_category: 'list_generator', event_label: `Req:${requestedFaction} -> Chosen:${result.faction}`, value: result.characters.length }); } catch {}
+      $('debug').textContent=`Requested: ${req}\nChosen faction: ${r.faction}\nSets: ${r.sets.length}\nCharacters: ${r.characters.length}`;
     }
-
-    function copyCharactersToClipboard() {
-      const items = Array.from(characterListEl.querySelectorAll('li')).map(li => '• ' + li.textContent);
-      const sets = Array.from(chosenSetsEl.querySelectorAll('span')).map(s => s.textContent);
-      const txt = [
-        'Moonstone List Generator',
-        '',
-        'Sets:',
-        ...sets.map(s => '- ' + s),
-        '',
-        `Characters (${items.length}):`,
-        ...items
-      ].join('\n');
-      navigator.clipboard.writeText(txt).then(() => {
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => copyBtn.textContent = 'Copy list', 1200);
-      });
-    }
+    function copyList(){ const items=[...document.querySelectorAll('#characterList li')].map(li=>'• '+li.textContent); const sets=[...document.querySelectorAll('#chosenSets span')].map(s=>s.textContent); const txt=['Moonstone List Generator','','Sets:',...sets.map(s=>'- '+s),'',`Characters (${items.length}):`,...items].join('\n'); navigator.clipboard.writeText(txt).then(()=>{ $('copyBtn').textContent='Copied!'; setTimeout(()=>$('copyBtn').textContent='Copy list',1200); }); }
 
     /**********************
-     * Wire-up & Init
+     * Init
      **********************/
-    copyBtn.addEventListener('click', copyCharactersToClipboard);
-
-    function runGenerate() {
-      const requested = factionSelect.value;
-      const result = generateListForFaction(requested);
-      state.lastResult = result;
-      renderResult(result, requested);
-    }
-
-    generateBtn.addEventListener('click', runGenerate);
-    rerollBtn.addEventListener('click', runGenerate);
-
-    (async function init() {
-      try {
-        await loadCSV();
-        populateFactionDropdown();
-        generateBtn.disabled = false; rerollBtn.disabled = false;
-      } catch (err) {
-        factionSelect.innerHTML = '<option>Error loading models.csv</option>';
-        generateBtn.disabled = true; rerollBtn.disabled = true;
-        console.error(err);
-        alert(err.message);
-      }
-    })();
+    $('copyBtn').addEventListener('click',copyList);
+    function run(){ const req=$('factionSelect').value; const r=generateList(req); renderResult(r,req);}
+    $('generateBtn').addEventListener('click',run); $('rerollBtn').addEventListener('click',run);
+    (async function init(){ await loadCSV(); populateFactionDropdown(); $('generateBtn').disabled=false; $('rerollBtn').disabled=false; })();
   </script>
 </body>
 </html>
-
