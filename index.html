@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moonstone List Generator</title>
+
+  <!-- Tailwind (CDN for quick standalone page) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BYBM86ZXL3"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-BYBM86ZXL3');
+  </script>
+
+  <style>
+    /* Small niceties */
+    .card { @apply bg-white/80 backdrop-blur rounded-2xl shadow p-5; }
+    .pill { @apply inline-block px-3 py-1 rounded-full text-xs font-medium bg-gray-100; }
+    .mono { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-50 to-slate-200 text-slate-800">
+  <div class="max-w-3xl mx-auto px-4 py-8 space-y-6">
+    <header class="space-y-2">
+      <h1 class="text-3xl font-bold">Moonstone List Generator</h1>
+      <p class="text-slate-600">Pick a faction (or Random), then generate three sets. We’ll include only faction-valid characters and automatically add extra sets if needed to reach at least 8 characters. Special rules applied for Murder Bunnies, Psychopomps, and Anya/Striga Anya.</p>
+    </header>
+
+    <section class="card space-y-4">
+      <div class="flex flex-col md:flex-row gap-3 items-start md:items-end">
+        <div class="grow">
+          <label class="block text-sm font-semibold mb-1" for="factionSelect">Faction</label>
+          <select id="factionSelect" class="w-full rounded-lg border px-3 py-2">
+            <option disabled selected>Loading factions…</option>
+          </select>
+        </div>
+        <div class="shrink-0">
+          <button id="generateBtn" class="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 disabled:opacity-50">Generate</button>
+        </div>
+      </div>
+      <p class="text-xs text-slate-500">Data source: <code class="mono">models.csv</code> in this folder (headers: Set, Character, Faction, Faction 2).</p>
+    </section>
+
+    <section id="results" class="space-y-6 hidden">
+      <div id="note" class="hidden p-3 rounded-lg bg-amber-100 text-amber-900 text-sm"></div>
+
+      <div class="card space-y-2">
+        <h2 class="text-xl font-semibold">Chosen Sets</h2>
+        <div id="chosenSets" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <div class="card space-y-2">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Characters (<span id="charCount">0</span>)</h2>
+          <button id="copyBtn" class="text-sm px-3 py-1 rounded-lg border hover:bg-slate-50">Copy list</button>
+        </div>
+        <ul id="characterList" class="list-disc pl-6 space-y-1"></ul>
+      </div>
+    </section>
+
+    <footer class="text-xs text-slate-500 pt-8">
+      © Moonstone tools — List Generator. Works offline on GitHub Pages with a local <code class="mono">models.csv</code>.
+    </footer>
+  </div>
+
+  <script>
+    /**********************
+     * Utility & constants
+     **********************/
+    const CSV_URL = 'models.csv';
+
+    // Exclusion rules:
+    const EXCLUDED_KEYWORDS = ['murder bunn', 'psychopomp']; // case-insensitive substring match
+    const ANYA_NAMES = ['anya', 'striga anya']; // pair counts as one
+    const RANDOM_LABEL = 'Random';
+
+    const state = {
+      rows: [],             // raw rows from CSV
+      factions: [],         // unique factions discovered
+      bySet: new Map(),     // Set -> [rows]
+      ready: false
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const factionSelect = $('factionSelect');
+    const generateBtn = $('generateBtn');
+    const results = $('results');
+    const chosenSetsEl = $('chosenSets');
+    const characterListEl = $('characterList');
+    const charCountEl = $('charCount');
+    const noteEl = $('note');
+    const copyBtn = $('copyBtn');
+
+    /**********************
+     * CSV loader (simple)
+     **********************/
+    async function loadCSV(url) {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error('Could not load models.csv. Ensure it is in the same folder with the correct headers.');
+      }
+      const text = await res.text();
+      return parseCSV(text);
+    }
+
+    // Extremely lightweight CSV parser (assumes no quoted commas in your data).
+    function parseCSV(text) {
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) return [];
+
+      const headers = lines[0].split(',').map(h => h.trim());
+      const idxSet = headers.indexOf('Set');
+      const idxChar = headers.indexOf('Character');
+      const idxFac1 = headers.indexOf('Faction');
+      const idxFac2 = headers.indexOf('Faction 2');
+
+      if (idxSet === -1 || idxChar === -1 || idxFac1 === -1 || idxFac2 === -1) {
+        throw new Error('Missing required headers. Expected: Set, Character, Faction, Faction 2');
+      }
+
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',').map(c => c.trim());
+        if (!parts[idxSet] && !parts[idxChar]) continue;
+        rows.push({
+          Set: parts[idxSet] || '',
+          Character: parts[idxChar] || '',
+          Faction: parts[idxFac1] || '',
+          Faction2: parts[idxFac2] || ''
+        });
+      }
+      return rows;
+    }
+
+    /**********************
+     * Data prep
+     **********************/
+    function buildIndexes(rows) {
+      state.rows = rows;
+
+      // Build unique faction list
+      const factionSet = new Set();
+      for (const r of rows) {
+        if (r.Faction) factionSet.add(r.Faction);
+        if (r.Faction2) factionSet.add(r.Faction2);
+      }
+      state.factions = Array.from(factionSet).sort((a,b) => a.localeCompare(b));
+
+      // Group by Set
+      state.bySet = new Map();
+      for (const r of rows) {
+        if (!state.bySet.has(r.Set)) state.bySet.set(r.Set, []);
+        state.bySet.get(r.Set).push(r);
+      }
+    }
+
+    function populateFactionDropdown() {
+      factionSelect.innerHTML = '';
+      // Add Random
+      const optR = document.createElement('option');
+      optR.value = RANDOM_LABEL;
+      optR.textContent = RANDOM_LABEL;
+      factionSelect.appendChild(optR);
+
+      // Add discovered factions
+      for (const f of state.factions) {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        factionSelect.appendChild(opt);
+      }
+    }
+
+    /**********************
+     * Core logic
+     **********************/
+    function normalize(str) {
+      return (str || '').toLowerCase();
+    }
+
+    function isExcludedCharacter(name) {
+      const n = normalize(name);
+      return EXCLUDED_KEYWORDS.some(k => n.includes(k));
+    }
+
+    function isAnyaName(name) {
+      const n = normalize(name);
+      return ANYA_NAMES.includes(n);
+    }
+
+    // Given a Set and chosen faction, return the list of faction-valid characters from that set,
+    // applying exclusions and the Anya/Striga rule.
+    function charactersForSetAndFaction(setName, faction) {
+      const rows = state.bySet.get(setName) || [];
+
+      // Filter rows to those that match the faction (in either column)
+      let chars = rows.filter(r => r.Faction === faction || r.Faction2 === faction)
+                      .map(r => r.Character)
+                      .filter(Boolean);
+
+      // Remove excluded (Murder Bunnies, Psychopomps)
+      chars = chars.filter(c => !isExcludedCharacter(c));
+
+      // Apply Anya/Striga merge: if both present, replace with single combined entry
+      const hasAnya = chars.some(c => isAnyaName(c));
+      if (hasAnya) {
+        const anyaSet = new Set(chars.filter(c => isAnyaName(c)).map(c => 'Anya / Striga Anya'));
+        // Remove any individual Anya variants
+        chars = chars.filter(c => !isAnyaName(c));
+        // Add the merged single label just once
+        if (anyaSet.size > 0) chars.push('Anya / Striga Anya');
+      }
+
+      return chars;
+    }
+
+    // Sets eligible for a given faction: at least one faction-valid character present after exclusions/merges.
+    function eligibleSetsForFaction(faction) {
+      const eligible = [];
+      for (const [setName] of state.bySet.entries()) {
+        const chars = charactersForSetAndFaction(setName, faction);
+        if (chars.length > 0) eligible.push(setName);
+      }
+      return eligible;
+    }
+
+    function pickRandom(arr, n, rng = Math.random) {
+      const copy = arr.slice();
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy.slice(0, n);
+    }
+
+    function chooseFaction(requested) {
+      if (requested === RANDOM_LABEL) {
+        // Uniform random among discovered factions
+        const i = Math.floor(Math.random() * state.factions.length);
+        return state.factions[i];
+      }
+      return requested;
+    }
+
+    function generateListForFaction(requestedFaction) {
+      const chosenFaction = chooseFaction(requestedFaction);
+
+      const eligibleSets = eligibleSetsForFaction(chosenFaction);
+      if (eligibleSets.length === 0) {
+        return {
+          faction: chosenFaction,
+          sets: [],
+          characters: [],
+          addedExtra: false,
+          message: 'No eligible sets for this faction in the data.'
+        };
+      }
+
+      // Start with 3 sets, then add until >= 8 characters.
+      const chosen = pickRandom(eligibleSets, Math.min(3, eligibleSets.length));
+      let allChars = [];
+      for (const s of chosen) {
+        allChars.push(...charactersForSetAndFaction(s, chosenFaction));
+      }
+
+      let addedExtra = false;
+      const remaining = eligibleSets.filter(s => !chosen.includes(s));
+
+      while (allChars.length < 8 && remaining.length > 0) {
+        addedExtra = true;
+        // add one more set
+        const next = pickRandom(remaining, 1)[0];
+        chosen.push(next);
+        // remove from remaining
+        const ix = remaining.indexOf(next);
+        if (ix >= 0) remaining.splice(ix, 1);
+        // add chars
+        allChars.push(...charactersForSetAndFaction(next, chosenFaction));
+      }
+
+      // De-duplicate characters while preserving order
+      const seen = new Set();
+      const uniqueChars = [];
+      for (const c of allChars) {
+        const key = c.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueChars.push(c);
+        }
+      }
+
+      return {
+        faction: chosenFaction,
+        sets: chosen,
+        characters: uniqueChars,
+        addedExtra,
+        message: uniqueChars.length < 8 ? 'Could not reach 8 characters with available sets.' : ''
+      };
+    }
+
+    /**********************
+     * Render
+     **********************/
+    function renderResult(result, requestedFaction) {
+      results.classList.remove('hidden');
+
+      // Note banner
+      if (result.addedExtra) {
+        noteEl.textContent = 'Fewer than 8 characters were found from the first three sets, so I added an extra set.';
+        noteEl.classList.remove('hidden');
+      } else if (result.message) {
+        noteEl.textContent = result.message;
+        noteEl.classList.remove('hidden');
+      } else {
+        noteEl.classList.add('hidden');
+      }
+
+      // Sets
+      chosenSetsEl.innerHTML = '';
+      result.sets.forEach(s => {
+        const span = document.createElement('span');
+        span.className = 'pill';
+        span.textContent = s;
+        chosenSetsEl.appendChild(span);
+      });
+
+      // Characters
+      characterListEl.innerHTML = '';
+      result.characters.forEach(c => {
+        const li = document.createElement('li');
+        li.textContent = c;
+        characterListEl.appendChild(li);
+      });
+      charCountEl.textContent = result.characters.length;
+
+      // Analytics event
+      try {
+        gtag('event', 'generate', {
+          event_category: 'list_generator',
+          event_label: `Requested:${requestedFaction} -> Chosen:${result.faction}`,
+          value: result.characters.length
+        });
+      } catch {}
+    }
+
+    function copyCharactersToClipboard() {
+      const items = Array.from(characterListEl.querySelectorAll('li')).map(li => '• ' + li.textContent);
+      const sets = Array.from(chosenSetsEl.querySelectorAll('span')).map(s => s.textContent);
+      const txt = [
+        'Moonstone List Generator',
+        '',
+        'Sets:',
+        ...sets.map(s => '- ' + s),
+        '',
+        `Characters (${items.length}):`,
+        ...items
+      ].join('\n');
+      navigator.clipboard.writeText(txt).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => copyBtn.textContent = 'Copy list', 1200);
+      });
+    }
+
+    /**********************
+     * Wire-up
+     **********************/
+    copyBtn.addEventListener('click', copyCharactersToClipboard);
+
+    generateBtn.addEventListener('click', () => {
+      if (!state.ready) return;
+      const requested = factionSelect.value;
+      const result = generateListForFaction(requested);
+      renderResult(result, requested);
+    });
+
+    (async function init() {
+      try {
+        const rows = await loadCSV(CSV_URL);
+        buildIndexes(rows);
+        populateFactionDropdown();
+        state.ready = true;
+        generateBtn.disabled = false;
+      } catch (err) {
+        factionSelect.innerHTML = '<option>Error loading models.csv</option>';
+        generateBtn.disabled = true;
+        console.error(err);
+        alert(err.message);
+      }
+    })();
+  </script>
+</body>
+</html>
