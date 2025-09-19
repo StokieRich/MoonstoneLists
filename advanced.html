@@ -33,7 +33,7 @@
       <h1 class="text-3xl font-bold">Moonstone List Generator — Advanced</h1>
       <p class="text-slate-600">
         Select the sets you own for a faction, then generate lists using only those. 
-        Optionally allow up to 1 or 2 extra “Purchase suggestion” boxes to be added. 
+        Optionally allow up to 1 or 2 extra ✨ boxes to be added. 
         You can also require that at least one healer is included.
       </p>
     </header>
@@ -119,6 +119,19 @@
     function pickRandom(arr,n){ const c=arr.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]];} return c.slice(0,n); }
 
     /**********************
+     * LocalStorage helpers
+     **********************/
+    function saveOwnedSets(faction) {
+      const owned = getOwnedSets();
+      localStorage.setItem(`moonstone_ownedSets_${faction}`, JSON.stringify(owned));
+    }
+    function loadOwnedSets(faction) {
+      const data = localStorage.getItem(`moonstone_ownedSets_${faction}`);
+      if (!data) return [];
+      try { return JSON.parse(data); } catch { return []; }
+    }
+
+    /**********************
      * CSV Load
      **********************/
     async function loadCSV(){
@@ -157,11 +170,16 @@
       const container=$('ownedSets');
       container.innerHTML='';
       const sets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
+      const saved = new Set(loadOwnedSets(faction));
+
       sets.forEach(set=>{
         const id='chk_'+set.replace(/\\W+/g,'_');
         const label=document.createElement('label');
         label.className="flex items-center gap-2 text-sm";
         label.innerHTML=`<input type="checkbox" id="${id}" data-set="${set}"> ${set}`;
+        const input=label.querySelector('input');
+        if(saved.has(set)) input.checked=true;
+        input.addEventListener('change', ()=> saveOwnedSets(faction));
         container.appendChild(label);
       });
     }
@@ -193,24 +211,21 @@
 
       if(mode==='owned'){
         chosen = pickRandom(owned, Math.min(3,owned.length));
-      } 
-      else if(mode==='add1' || mode==='add2'){
+      } else {
         const extraSlots = (mode==='add1') ? 1 : 2;
         const poolSize = owned.length + extraSlots;
-        const picks=[];
-        while(picks.length<3){
+        while(chosen.length<3){
           const roll=Math.floor(Math.random()*poolSize);
           if(roll<owned.length){
             const set=owned[roll];
-            if(!picks.includes(set)) picks.push(set);
+            if(set && !chosen.includes(set)) chosen.push(set);
           } else {
             if(unowned.length){
               const set=pickRandom(unowned,1)[0];
-              if(!picks.includes(set)) picks.push(set);
+              if(set && !chosen.includes(set)) chosen.push(set);
             }
           }
         }
-        chosen=picks;
       }
 
       // If healer mandatory: bias last pick towards healer set if needed
@@ -243,7 +258,7 @@
         const span=document.createElement('span');
         span.className='pill';
         if(!owned.includes(s)){
-          span.textContent='✨ '+s+' (Purchase suggestion)';
+          span.textContent='✨ '+s;
           span.classList.add('bg-yellow-100','text-yellow-800');
         } else {
           span.textContent=s;
@@ -280,8 +295,14 @@
      * Init
      **********************/
     function initEvents(){
-      $('selectAllBtn').addEventListener('click',()=>{document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=true);});
-      $('clearAllBtn').addEventListener('click',()=>{document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=false);});
+      $('selectAllBtn').addEventListener('click',()=>{
+        document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=true);
+        if(state.lastFaction) saveOwnedSets(state.lastFaction);
+      });
+      $('clearAllBtn').addEventListener('click',()=>{
+        document.querySelectorAll('#ownedSets input').forEach(i=>i.checked=false);
+        if(state.lastFaction) localStorage.removeItem(`moonstone_ownedSets_${state.lastFaction}`);
+      });
       document.querySelectorAll('.genBtn').forEach(btn=>btn.addEventListener('click',()=>{
         const mode=btn.dataset.mode;
         const r=generateAdvanced(mode);
