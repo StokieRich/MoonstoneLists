@@ -377,3 +377,13 @@
       }));
       $('copyBtn').addEventListener('click',copyList);
       $('factionSelect').addEventListener('change',(e)=>{showOwnedSets
+}
+
+    (async function(){
+      await loadCSV();
+      populateFactionDropdown();
+      initEvents();
+    })();
+  </script>
+</body>
+</html>
