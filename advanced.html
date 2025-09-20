@@ -262,16 +262,15 @@
         }
       }
 
-      // Characters
-      // Ensure at least 8 characters
-let addedExtra = false;
-let remaining;
+// Characters from chosen sets
+let allChars = chosen.flatMap(s => charactersForSetAndFaction(s, faction));
+allChars = uniquePreserve(allChars);
 
-if (mode === 'owned') {
-  remaining = owned.filter(s => !chosen.includes(s));
-} else {
-  remaining = allSets.filter(s => !chosen.includes(s));
-}
+// Ensure at least 8 characters
+let addedExtra = false;
+let remaining = (mode === 'owned')
+  ? owned.filter(s => !chosen.includes(s))
+  : allSets.filter(s => !chosen.includes(s));
 
 while (allChars.length < 8 && remaining.length) {
   addedExtra = true;
@@ -393,5 +392,6 @@ while (allChars.length < 8 && remaining.length) {
   </script>
 </body>
 </html>
+
 
 
