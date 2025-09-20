@@ -288,14 +288,15 @@
     function renderResult(r){
       $('results').classList.remove('hidden');
       $('chosenSets').innerHTML='';
-      const owned=(state.lastFaction==='Random')?[]:getOwnedSets();
 
-      if(state.lastFaction==='Random' && r.randomChosen){
+      if(r.randomChosen){
         $('randomNote').textContent=`Random chose: ${r.randomChosen}`;
         $('randomNote').classList.remove('hidden');
       } else {
         $('randomNote').classList.add('hidden');
       }
+
+      const owned = loadOwnedSets(r.faction);
 
       r.sets.forEach(s=>{
         const span=document.createElement('span');
@@ -375,14 +376,4 @@
         renderResult(r);
       }));
       $('copyBtn').addEventListener('click',copyList);
-      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets(e.target.value);});
-    }
-
-    (async function(){
-      await loadCSV();
-      populateFactionDropdown();
-      initEvents();
-    })();
-  </script>
-</body>
-</html>
+      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets
