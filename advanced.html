@@ -376,9 +376,9 @@
         renderResult(r);
       }));
       $('copyBtn').addEventListener('click',copyList);
-      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets
-}
-
+      $('factionSelect').addEventListener('change', (e) => {
+  showOwnedSets(e.target.value);
+});
     (async function(){
       await loadCSV();
       populateFactionDropdown();
@@ -387,3 +387,4 @@
   </script>
 </body>
 </html>
+
