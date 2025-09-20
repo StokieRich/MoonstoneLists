@@ -375,4 +375,14 @@
         renderResult(r);
       }));
       $('copyBtn').addEventListener('click',copyList);
-      $('factionSelect').addEventListener('change
+      $('factionSelect').addEventListener('change',(e)=>{showOwnedSets(e.target.value);});
+    }
+
+    (async function(){
+      await loadCSV();
+      populateFactionDropdown();
+      initEvents();
+    })();
+  </script>
+</body>
+</html>
