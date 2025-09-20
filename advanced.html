@@ -263,20 +263,20 @@
       }
 
       // Characters
-      let allChars=chosen.flatMap(s=>charactersForSetAndFaction(s,faction));
-      allChars=uniquePreserve(allChars);
-
       // Ensure at least 8 characters
-      let addedExtra=false;
-      let remaining=allSets.filter(s=>!chosen.includes(s));
-      while(allChars.length<8 && remaining.length){
-        addedExtra=true;
-        const next=pickRandom(remaining,1)[0];
-        chosen.push(next);
-        remaining=remaining.filter(x=>x!==next);
-        allChars.push(...charactersForSetAndFaction(next,faction));
-        allChars=uniquePreserve(allChars);
-      }
+let addedExtra = false;
+let remaining = (mode === 'owned')
+  ? owned.filter(s => !chosen.includes(s))
+  : allSets.filter(s => !chosen.includes(s));
+
+while(allChars.length < 8 && remaining.length){
+  addedExtra = true;
+  const next = pickRandom(remaining,1)[0];
+  chosen.push(next);
+  remaining = remaining.filter(x => x !== next);
+  allChars.push(...charactersForSetAndFaction(next,faction));
+  allChars = uniquePreserve(allChars);
+}
 
       return {faction,randomChosen,sets:chosen,characters:allChars,addedExtra,
               debug:`Mode=${mode}\nFaction=${faction}\nOwned=${owned.length}\nUnowned=${unowned.length}`};
@@ -389,3 +389,4 @@
   </script>
 </body>
 </html>
+
