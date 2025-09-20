@@ -188,7 +188,7 @@
       const sets=[...state.bySet.keys()].filter(s=>charactersForSetAndFaction(s,faction).length>0);
       const saved = new Set(loadOwnedSets(faction));
       sets.forEach(set=>{
-        const id='chk_'+set.replace(/\\W+/g,'_');
+        const id='chk_'+set.replace(/\W+/g,'_');
         const label=document.createElement('label');
         label.className="flex items-center gap-2 text-sm";
         label.innerHTML=`<input type="checkbox" id="${id}" data-set="${set}"> ${set}`;
@@ -377,8 +377,10 @@
       }));
       $('copyBtn').addEventListener('click',copyList);
       $('factionSelect').addEventListener('change', (e) => {
-  showOwnedSets(e.target.value);
-});
+        showOwnedSets(e.target.value);
+      });
+    }
+
     (async function(){
       await loadCSV();
       populateFactionDropdown();
@@ -387,4 +389,3 @@
   </script>
 </body>
 </html>
-
